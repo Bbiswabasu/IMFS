@@ -1,3 +1,5 @@
+/* Implementation of Simple File System */
+
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -55,46 +57,142 @@ int create_file()
 {
     if (state != MOUNTED)
         return -1;
-    inode *new_inode = (inode *)malloc(sizeof(inode));
-    new_inode->valid = 1;
-    new_inode->size = 0;
-    new_inode->indirect = 0;
+
+    inode new_inode;
+    new_inode.valid = 1;
+    new_inode.size = 0;
+    new_inode.indirect = 0;
 
     super_block *sb = (super_block *)malloc(BLOCK_SIZE);
     if (read_block(my_disk, 0, sb) != 0)
         return -1;
 
-    int inode_index = 0;
-    for (int block = sb->inode_bitmap_block_idx; block < sb->data_bitmap_block_idx; block++)
+    int inumber = 0;
+    for (int blocknr = sb->inode_bitmap_block_idx; blocknr < sb->data_bitmap_block_idx; blocknr++)
     {
         uint8_t bitmap[BLOCK_SIZE];
-        if (read_block(my_disk, block, bitmap) != 0)
+        if (read_block(my_disk, blocknr, bitmap) != 0)
             return -1;
-        for (int chunk = 0; chunk < BLOCK_SIZE / 8; chunk++)
+        for (int offset = 0; offset < BLOCK_SIZE / 8; offset++)
         {
-            if (bitmap[chunk] == 0xFF)
+            if (bitmap[offset] == 0xFF)
             {
-                inode_index += 8;
+                inumber += 8;
                 continue;
             }
             for (int bit = 7; bit >= 0; bit--)
             {
-                if ((bitmap[chunk] >> bit) & 1)
+                if ((bitmap[offset] >> bit) & 1)
                 {
-                    inode_index++;
+                    inumber++;
                     continue;
                 }
                 /* update inode bitmap */
-                bitmap[chunk] = bitmap[chunk] | (1 << bit);
-                write_block(my_disk, block, bitmap);
+                bitmap[offset] = bitmap[offset] | (1 << bit);
+                if (write_block(my_disk, blocknr, bitmap) != 0)
+                    return -1;
 
                 /* store new inode on disk */
-                write_block(my_disk, sb->inode_block_idx + inode_index, new_inode);
-                return inode_index;
+                const int NUM_INODES_PER_BLOCK = BLOCK_SIZE / sizeof(inode);
+                blocknr = inumber / NUM_INODES_PER_BLOCK;
+                offset = inumber % NUM_INODES_PER_BLOCK;
+                inode inodes[NUM_INODES_PER_BLOCK];
+                inodes[offset] = new_inode;
+                if (write_block(my_disk, sb->inode_block_idx + blocknr, inodes))
+                    return -1;
+                return inumber;
             }
         }
     }
     return -1;
+}
+int remove_file(int inumber)
+{
+    /* read super block */
+    super_block *sb = (super_block *)malloc(BLOCK_SIZE);
+    if (read_block(my_disk, 0, sb) != 0)
+        return -1;
+
+    /* get bit position in inode bitmap */
+    const int NUM_BITS_PER_BLOCK = 8 * BLOCK_SIZE;
+    int blocknr = inumber / NUM_BITS_PER_BLOCK;
+    int offset = inumber % NUM_BITS_PER_BLOCK / 8;
+    int bit = inumber - blocknr * NUM_BITS_PER_BLOCK - offset * 8;
+
+    /* update inode bitmap by setting the bit to 0 */
+    uint8_t bitmap[BLOCK_SIZE];
+    if (read_block(my_disk, sb->inode_bitmap_block_idx + blocknr, bitmap) != 0)
+        return -1;
+    bitmap[offset] &= (0xFF ^ (1 << (7 - bit)));
+    if (write_block(my_disk, sb->inode_bitmap_block_idx + blocknr, bitmap) != 0)
+        return -1;
+
+    /* update inode by setting valid to 0 */
+    const int NUM_INODES_PER_BLOCK = BLOCK_SIZE / sizeof(inode);
+    blocknr = inumber / NUM_INODES_PER_BLOCK;
+    offset = inumber % NUM_INODES_PER_BLOCK;
+    inode inodes[NUM_INODES_PER_BLOCK];
+    if (read_block(my_disk, sb->inode_block_idx + blocknr, inodes) != 0)
+        return -1;
+    inodes[offset].valid = 0;
+    if (write_block(my_disk, sb->inode_block_idx + blocknr, inodes) != 0)
+        return -1;
+    return 0;
+}
+
+int write_i(int inumber, char *data, int length, int offset)
+{
+    /* check if inode is allocated and valid */
+    super_block *sb = (super_block *)malloc(BLOCK_SIZE);
+    if (read_block(my_disk, 0, sb) != 0)
+        return -1;
+
+    /* get bit position in inode bitmap */
+    const int NUM_BITS_PER_BLOCK = 8 * BLOCK_SIZE;
+    int inode_bitmap_blocknr = inumber / NUM_BITS_PER_BLOCK;
+    int inode_bitmap_offset = inumber % NUM_BITS_PER_BLOCK / 8;
+    int bit = inumber - inode_bitmap_blocknr * NUM_BITS_PER_BLOCK - inode_bitmap_offset * 8;
+
+    uint8_t bitmap[BLOCK_SIZE];
+    if (read_block(my_disk, sb->inode_bitmap_block_idx + inode_bitmap_blocknr, bitmap) != 0)
+        return -1;
+    if (!((bitmap[inode_bitmap_offset] >> (7 - bit)) & 1))
+    {
+        printf("inode doesn't exist\n");
+        return -1;
+    }
+
+    const int NUM_INODES_PER_BLOCK = BLOCK_SIZE / sizeof(inode);
+    int inode_blocknr = inumber / NUM_INODES_PER_BLOCK;
+    int inode_offset = inumber % NUM_INODES_PER_BLOCK;
+    inode inodes[NUM_INODES_PER_BLOCK];
+    if (read_block(my_disk, sb->inode_block_idx + inode_blocknr, inodes) != 0)
+        return -1;
+    if (inodes[inode_offset].valid == 0)
+    {
+        printf("inode no longer valid\n");
+        return -1;
+    }
+
+    /* check whether offset is valid */
+    if (inodes[inode_offset].size < offset)
+    {
+        printf("Invalid offset\n");
+        return -1;
+    }
+    int data_blocknr = offset / BLOCK_SIZE;
+    int data_offset = offset % BLOCK_SIZE;
+    char data_block[BLOCK_SIZE];
+    if (read_block(my_disk, data_blocknr, data_block) != 0)
+        return -1;
+    for (int i = 0; i < length; i++)
+        data_block[i + offset] = data[i];
+    data_block[offset + length] = EOF;
+    inodes[inode_offset].size = offset + length;
+    if (write_block(my_disk, sb->data_block_idx + data_blocknr, data_block))
+        return 0;
+    if (write_block(my_disk, sb->inode_block_idx + inode_blocknr, inodes) != 0)
+        return -1;
 }
 int main()
 {
@@ -122,11 +220,33 @@ int main()
         exit(1);
     }
     printf("Inode %d allocated\n", inode_index);
-    // inode_index = create_file();
-    // if (inode_index == -1)
-    // {
-    //     printf("No free inode\n");
-    //     exit(1);
-    // }
-    // printf("Inode %d allocated\n", inode_index);
+    inode_index = create_file();
+    if (inode_index == -1)
+    {
+        printf("No free inode\n");
+        exit(1);
+    }
+    printf("Inode %d allocated\n", inode_index);
+
+    if (remove_file(0))
+    {
+        printf("Failed to remove file\n");
+        exit(1);
+    }
+    printf("File removed\n");
+    inode_index = create_file();
+    if (inode_index == -1)
+    {
+        printf("No free inode\n");
+        exit(1);
+    }
+    printf("Inode %d allocated\n", inode_index);
+
+    char data[4];
+    if (write_i(1, data, 0, 0) != 0)
+    {
+        printf("Write error\n");
+        exit(1);
+    }
+    printf("Write success");
 }

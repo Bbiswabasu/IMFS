@@ -1,3 +1,5 @@
+/* Implementation of emulated disk interface */
+
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
