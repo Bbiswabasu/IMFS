@@ -1,3 +1,5 @@
+#include <stdint.h>
+
 #define MAGIC_NUMBER 12345
 #define NUM_BLOCKS 1024
 #define MOUNTED 1
@@ -23,6 +25,11 @@ typedef struct inode
     uint32_t indirect;
 } inode;
 
-disk* my_disk;
+disk *my_disk;
 int state;
 int format(disk *diskptr);
+int mount(disk *diskptr);
+int create_file();
+int remove_file(int inumber);
+int write_i(int inumber, char *data, int length, int offset);
+int read_i(int inumber, char *data, int length, int offset);

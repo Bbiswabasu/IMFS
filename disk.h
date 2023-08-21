@@ -1,3 +1,5 @@
+#include <stdint.h>
+
 #define BLOCK_SIZE 4096
 
 typedef struct disk

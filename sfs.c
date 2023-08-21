@@ -1,6 +1,5 @@
 /* Implementation of Simple File System */
 
-#include <stdint.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <math.h>
@@ -53,58 +52,72 @@ int mount(disk *diskptr)
         return -1;
     }
 }
+int get_free_block(int start_block, int end_block)
+{
+    int bit_number = 0;
+    /* find free block from bitmap */
+    for (int inode_bitmap_blocknr = start_block; inode_bitmap_blocknr < end_block; inode_bitmap_blocknr++)
+    {
+        uint8_t bitmap[BLOCK_SIZE];
+        if (read_block(my_disk, inode_bitmap_blocknr, bitmap) != 0)
+            return -1;
+        for (int inode_bitmap_offset = 0; inode_bitmap_offset < BLOCK_SIZE / 8; inode_bitmap_offset++)
+        {
+            if (bitmap[inode_bitmap_offset] == 0xFF)
+            {
+                bit_number += 8;
+                continue;
+            }
+            for (int bit = 7; bit >= 0; bit--)
+            {
+                if ((bitmap[inode_bitmap_offset] >> bit) & 1)
+                    bit_number++;
+                else
+                {
+                    bitmap[inode_bitmap_offset] = bitmap[inode_bitmap_offset] | (1 << bit);
+                    if (write_block(my_disk, inode_bitmap_blocknr, bitmap) != 0)
+                        return -1;
+                    return bit_number;
+                }
+            }
+        }
+    }
+    return -1;
+}
 int create_file()
 {
     if (state != MOUNTED)
         return -1;
 
+    /* create new inode */
     inode new_inode;
     new_inode.valid = 1;
     new_inode.size = 0;
-    new_inode.indirect = 0;
+    new_inode.indirect = -1;
+    for (int i = 0; i < 5; i++)
+        new_inode.direct[i] = -1;
 
     super_block *sb = (super_block *)malloc(BLOCK_SIZE);
     if (read_block(my_disk, 0, sb) != 0)
         return -1;
 
-    int inumber = 0;
-    for (int blocknr = sb->inode_bitmap_block_idx; blocknr < sb->data_bitmap_block_idx; blocknr++)
+    int inumber = get_free_block(sb->inode_bitmap_block_idx, sb->data_bitmap_block_idx);
+    if (inumber == -1)
     {
-        uint8_t bitmap[BLOCK_SIZE];
-        if (read_block(my_disk, blocknr, bitmap) != 0)
-            return -1;
-        for (int offset = 0; offset < BLOCK_SIZE / 8; offset++)
-        {
-            if (bitmap[offset] == 0xFF)
-            {
-                inumber += 8;
-                continue;
-            }
-            for (int bit = 7; bit >= 0; bit--)
-            {
-                if ((bitmap[offset] >> bit) & 1)
-                {
-                    inumber++;
-                    continue;
-                }
-                /* update inode bitmap */
-                bitmap[offset] = bitmap[offset] | (1 << bit);
-                if (write_block(my_disk, blocknr, bitmap) != 0)
-                    return -1;
-
-                /* store new inode on disk */
-                const int NUM_INODES_PER_BLOCK = BLOCK_SIZE / sizeof(inode);
-                blocknr = inumber / NUM_INODES_PER_BLOCK;
-                offset = inumber % NUM_INODES_PER_BLOCK;
-                inode inodes[NUM_INODES_PER_BLOCK];
-                inodes[offset] = new_inode;
-                if (write_block(my_disk, sb->inode_block_idx + blocknr, inodes))
-                    return -1;
-                return inumber;
-            }
-        }
+        printf("No free inode\n");
+        return -1;
     }
-    return -1;
+
+    /* store new inode on disk */
+    const int NUM_INODES_PER_BLOCK = BLOCK_SIZE / sizeof(inode);
+    int inode_blocknr = inumber / NUM_INODES_PER_BLOCK;
+    int inode_offset = inumber % NUM_INODES_PER_BLOCK;
+    inode inodes[NUM_INODES_PER_BLOCK];
+    inodes[inode_offset] = new_inode;
+    if (write_block(my_disk, sb->inode_block_idx + inode_blocknr, inodes))
+        return -1;
+    return inumber;
+    return inumber;
 }
 int remove_file(int inumber)
 {
@@ -115,31 +128,32 @@ int remove_file(int inumber)
 
     /* get bit position in inode bitmap */
     const int NUM_BITS_PER_BLOCK = 8 * BLOCK_SIZE;
-    int blocknr = inumber / NUM_BITS_PER_BLOCK;
-    int offset = inumber % NUM_BITS_PER_BLOCK / 8;
-    int bit = inumber - blocknr * NUM_BITS_PER_BLOCK - offset * 8;
+    int inode_bitmap_blocknr = inumber / NUM_BITS_PER_BLOCK;
+    int inode_bitmap_offset = inumber % NUM_BITS_PER_BLOCK / 8;
+    int bit = inumber - inode_bitmap_blocknr * NUM_BITS_PER_BLOCK - inode_bitmap_offset * 8;
 
     /* update inode bitmap by setting the bit to 0 */
     uint8_t bitmap[BLOCK_SIZE];
-    if (read_block(my_disk, sb->inode_bitmap_block_idx + blocknr, bitmap) != 0)
+    if (read_block(my_disk, sb->inode_bitmap_block_idx + inode_bitmap_blocknr, bitmap) != 0)
         return -1;
-    bitmap[offset] &= (0xFF ^ (1 << (7 - bit)));
-    if (write_block(my_disk, sb->inode_bitmap_block_idx + blocknr, bitmap) != 0)
+    bitmap[inode_bitmap_offset] &= (0xFF ^ (1 << (7 - bit)));
+    if (write_block(my_disk, sb->inode_bitmap_block_idx + inode_bitmap_blocknr, bitmap) != 0)
         return -1;
 
     /* update inode by setting valid to 0 */
     const int NUM_INODES_PER_BLOCK = BLOCK_SIZE / sizeof(inode);
-    blocknr = inumber / NUM_INODES_PER_BLOCK;
-    offset = inumber % NUM_INODES_PER_BLOCK;
+    int inode_blocknr = inumber / NUM_INODES_PER_BLOCK;
+    int inode_offset = inumber % NUM_INODES_PER_BLOCK;
     inode inodes[NUM_INODES_PER_BLOCK];
-    if (read_block(my_disk, sb->inode_block_idx + blocknr, inodes) != 0)
+    if (read_block(my_disk, sb->inode_block_idx + inode_blocknr, inodes) != 0)
         return -1;
-    inodes[offset].valid = 0;
-    if (write_block(my_disk, sb->inode_block_idx + blocknr, inodes) != 0)
+    inodes[inode_offset].valid = 0;
+    if (write_block(my_disk, sb->inode_block_idx + inode_blocknr, inodes) != 0)
         return -1;
+
+    /* free data blocks from data block bitmap */
     return 0;
 }
-
 int write_i(int inumber, char *data, int length, int offset)
 {
     /* check if inode is allocated and valid */
@@ -180,73 +194,124 @@ int write_i(int inumber, char *data, int length, int offset)
         printf("Invalid offset\n");
         return -1;
     }
+
+    int bytes_written = 0;
     int data_blocknr = offset / BLOCK_SIZE;
     int data_offset = offset % BLOCK_SIZE;
     char data_block[BLOCK_SIZE];
-    if (read_block(my_disk, data_blocknr, data_block) != 0)
-        return -1;
-    for (int i = 0; i < length; i++)
-        data_block[i + offset] = data[i];
-    data_block[offset + length] = EOF;
-    inodes[inode_offset].size = offset + length;
-    if (write_block(my_disk, sb->data_block_idx + data_blocknr, data_block))
-        return 0;
+    while (bytes_written < length)
+    {
+        /* check whether data_blocknr is already allocated on the data block bitmap */
+        int data_block_index;
+        if (data_blocknr < 5)
+        {
+            if ((data_block_index = inodes[inode_offset].direct[data_blocknr]) == -1)
+            {
+                /* allocate new data block and assign it to data_block_index */
+                data_block_index = get_free_block(sb->data_bitmap_block_idx, sb->inode_block_idx);
+                inodes[inode_offset].direct[data_blocknr] = data_block_index;
+                printf("Allocated data block: %d\n", data_block_index);
+            }
+        }
+        else
+        {
+            /* get indirect pointer */
+        }
+        if (read_block(my_disk, sb->data_block_idx + data_block_index, data_block) != 0)
+            return -1;
+
+        while (bytes_written < length && data_offset != BLOCK_SIZE)
+        {
+            data_block[data_offset] = data[bytes_written];
+            bytes_written++;
+            data_offset++;
+        }
+        if (write_block(my_disk, sb->data_block_idx + data_block_index, data_block) != 0)
+            return -1;
+        data_offset = 0;
+        data_blocknr++;
+    }
+    inodes[inode_offset].size = offset + bytes_written;
     if (write_block(my_disk, sb->inode_block_idx + inode_blocknr, inodes) != 0)
         return -1;
+    return bytes_written;
 }
-int main()
+int read_i(int inumber, char *data, int length, int offset)
 {
-    disk *my_disk = create_disk((NUM_BLOCKS + 1) * BLOCK_SIZE);
-    printf("Disk created successfully\n");
-    show_disk_info(my_disk);
+    /* check if inode is allocated and valid */
+    super_block *sb = (super_block *)malloc(BLOCK_SIZE);
+    if (read_block(my_disk, 0, sb) != 0)
+        return -1;
 
-    if (format(my_disk) != 0)
-    {
-        printf("Error while formatting disk for SFS\n");
-        exit(1);
-    }
-    printf("Disk formatted successfully for SFS\n");
+    /* get bit position in inode bitmap */
+    const int NUM_BITS_PER_BLOCK = 8 * BLOCK_SIZE;
+    int inode_bitmap_blocknr = inumber / NUM_BITS_PER_BLOCK;
+    int inode_bitmap_offset = inumber % NUM_BITS_PER_BLOCK / 8;
+    int bit = inumber - inode_bitmap_blocknr * NUM_BITS_PER_BLOCK - inode_bitmap_offset * 8;
 
-    if (mount(my_disk) != 0)
+    uint8_t bitmap[BLOCK_SIZE];
+    if (read_block(my_disk, sb->inode_bitmap_block_idx + inode_bitmap_blocknr, bitmap) != 0)
+        return -1;
+    if (!((bitmap[inode_bitmap_offset] >> (7 - bit)) & 1))
     {
-        printf("Disk mount error\n");
-        exit(1);
+        printf("inode doesn't exist\n");
+        return -1;
     }
-    printf("Disk mounted successfully\n");
-    int inode_index = create_file();
-    if (inode_index == -1)
-    {
-        printf("No free inode\n");
-        exit(1);
-    }
-    printf("Inode %d allocated\n", inode_index);
-    inode_index = create_file();
-    if (inode_index == -1)
-    {
-        printf("No free inode\n");
-        exit(1);
-    }
-    printf("Inode %d allocated\n", inode_index);
 
-    if (remove_file(0))
+    const int NUM_INODES_PER_BLOCK = BLOCK_SIZE / sizeof(inode);
+    int inode_blocknr = inumber / NUM_INODES_PER_BLOCK;
+    int inode_offset = inumber % NUM_INODES_PER_BLOCK;
+    inode inodes[NUM_INODES_PER_BLOCK];
+    if (read_block(my_disk, sb->inode_block_idx + inode_blocknr, inodes) != 0)
+        return -1;
+    if (inodes[inode_offset].valid == 0)
     {
-        printf("Failed to remove file\n");
-        exit(1);
+        printf("inode no longer valid\n");
+        return -1;
     }
-    printf("File removed\n");
-    inode_index = create_file();
-    if (inode_index == -1)
-    {
-        printf("No free inode\n");
-        exit(1);
-    }
-    printf("Inode %d allocated\n", inode_index);
 
-    char data[4];
-    if (write_i(1, data, 0, 0) != 0)
+    /* check whether offset is valid */
+    if (inodes[inode_offset].size < offset)
     {
-        printf("Write error\n");
-        exit(1);
+        printf("Invalid offset\n");
+        return -1;
     }
-    printf("Write success");
+
+    int bytes_read = 0;
+    int data_blocknr = offset / BLOCK_SIZE;
+    int data_offset = offset % BLOCK_SIZE;
+    char data_block[BLOCK_SIZE];
+    while (bytes_read < length)
+    {
+        /* check whether data_blocknr is already allocated on the data block bitmap */
+        int data_block_index;
+        if (data_blocknr < 5)
+        {
+            data_block_index = inodes[inode_offset].direct[data_blocknr];
+        }
+        else
+        {
+            /* get indirect pointer */
+        }
+        if (read_block(my_disk, sb->data_block_idx + data_block_index, data_block) != 0)
+            return -1;
+
+        int eof = 0;
+        while (bytes_read < length && data_offset != BLOCK_SIZE)
+        {
+            data[bytes_read] = data_block[data_offset];
+            bytes_read++;
+            data_offset++;
+            if (offset + bytes_read >= inodes[inode_offset].size)
+            {
+                eof = 1;
+                break;
+            }
+        }
+        if (eof)
+            break;
+        data_offset = 0;
+        data_blocknr++;
+    }
+    return bytes_read;
 }
