@@ -1,4 +1,9 @@
 #include <stdint.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <math.h>
+#include <string.h>
+#include "disk.h"
 
 #define MAGIC_NUMBER 12345
 #define NUM_BLOCKS 1024

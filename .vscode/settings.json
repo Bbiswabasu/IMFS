@@ -12,6 +12,11 @@
         "string": "c",
         "string_view": "c",
         "unordered_map": "c",
-        "vector": "c"
+        "vector": "c",
+        "sfs.h": "c",
+        "math.h": "c",
+        "string.h": "c",
+        "disk.h": "c",
+        "dir.h": "c"
     }
 }

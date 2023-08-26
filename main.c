@@ -1,13 +1,32 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include "disk.h"
+#include <string.h>
 #include "sfs.h"
-#include "string.h"
+#include "dir.h"
 
 int main()
 {
+    /* initializing the disk and filesystem by formatting and mounting the disk */
     disk *my_disk = create_disk((NUM_BLOCKS + 1) * BLOCK_SIZE);
-    printf("Disk created successfully\n");
+    printf("Disk created successfully\n\n");
+    if (format(my_disk) != 0)
+    {
+        printf("Error while formatting disk for SFS\n\n");
+        exit(1);
+    }
+    printf("Disk formatted successfully for SFS\n\n");
+    if (mount(my_disk) != 0)
+    {
+        printf("Disk mount error\n\n");
+        exit(1);
+    }
+    printf("Disk mounted successfully\n\n");
+
+    if (create_file() == 0)
+        printf("Root directory created successfully\n\n");
+    else
+        exit(1);
+
     while (1)
     {
         char cmd[20];
@@ -39,10 +58,9 @@ int main()
         {
             int inumber = create_file();
             if (inumber == -1)
-            {
                 printf("No free inode\n\n");
-            }
-            printf("Inode %d allocated\n\n", inumber);
+            else
+                printf("Inode %d allocated\n\n", inumber);
         }
         else if (strcmp(cmd, "remove_file") == 0)
         {
@@ -50,12 +68,11 @@ int main()
             printf("Enter inode number: ");
             scanf("%d", &inumber);
             if (remove_file(inumber) == -1)
-            {
                 printf("Failed to remove file\n\n");
-            }
-            printf("File removed\n\n");
+            else
+                printf("File removed\n\n");
         }
-        else if (strcmp(cmd, "write_file") == 0)
+        else if (strcmp(cmd, "write_i") == 0)
         {
             int inumber, length, offset;
             printf("Enter inode number: ");
@@ -69,12 +86,11 @@ int main()
             scanf("%s", data);
             int bytes_written = write_i(inumber, data, length, offset);
             if (bytes_written == -1)
-            {
                 printf("Error while writing to file\n\n");
-            }
-            printf("%d bytes of data written successfully\n\n", bytes_written);
+            else
+                printf("%d bytes of data written successfully\n\n", bytes_written);
         }
-        else if (strcmp(cmd, "read_file") == 0)
+        else if (strcmp(cmd, "read_i") == 0)
         {
             int inumber, length, offset;
             printf("Enter inode number: ");
@@ -86,10 +102,26 @@ int main()
             char data[length];
             int bytes_read = read_i(inumber, data, length, offset);
             if (bytes_read == -1)
-            {
                 printf("Error while reading to file\n\n");
-            }
-            printf("%d bytes of data read successfully:\n%s\n\n", bytes_read, data);
+            else
+                printf("%d bytes of data read successfully:\n%s\n\n", bytes_read, data);
+        }
+        else if (strcmp(cmd, "create_dir") == 0)
+        {
+            char dirpath[1000];
+            printf("Enter directory path: ");
+            scanf("%s", dirpath);
+            if (create_dir(dirpath) != 0)
+                printf("Error creating directory\n\n");
+            else
+                printf("Directory created successfully\n\n");
+        }
+        else if (strcmp(cmd, "get_dir") == 0)
+        {
+            char dirpath[1000];
+            printf("Enter directory path: ");
+            scanf("%s", dirpath);
+            get_dir(dirpath);
         }
         else if (strcmp(cmd, "exit") == 0)
             exit(0);

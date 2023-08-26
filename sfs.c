@@ -1,10 +1,4 @@
 /* Implementation of Simple File System */
-
-#include <stdlib.h>
-#include <stdio.h>
-#include <math.h>
-#include <string.h>
-#include "disk.h"
 #include "sfs.h"
 
 int format(disk *diskptr)
@@ -113,10 +107,12 @@ int create_file()
     int inode_blocknr = inumber / NUM_INODES_PER_BLOCK;
     int inode_offset = inumber % NUM_INODES_PER_BLOCK;
     inode inodes[NUM_INODES_PER_BLOCK];
-    inodes[inode_offset] = new_inode;
-    if (write_block(my_disk, sb->inode_block_idx + inode_blocknr, inodes))
+    if (read_block(my_disk, sb->inode_block_idx + inode_blocknr, inodes) != 0)
         return -1;
-    return inumber;
+    inodes[inode_offset] = new_inode;
+
+    if (write_block(my_disk, sb->inode_block_idx + inode_blocknr, inodes) != 0)
+        return -1;
     return inumber;
 }
 int remove_file(int inumber)
@@ -299,14 +295,14 @@ int read_i(int inumber, char *data, int length, int offset)
         int eof = 0;
         while (bytes_read < length && data_offset != BLOCK_SIZE)
         {
-            data[bytes_read] = data_block[data_offset];
-            bytes_read++;
-            data_offset++;
             if (offset + bytes_read >= inodes[inode_offset].size)
             {
                 eof = 1;
                 break;
             }
+            data[bytes_read] = data_block[data_offset];
+            bytes_read++;
+            data_offset++;
         }
         if (eof)
             break;
