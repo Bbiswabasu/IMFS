@@ -1,6 +1,11 @@
 /* Implementation of Simple File System */
 #include "sfs.h"
 
+int max(int a, int b)
+{
+    return a > b ? a : b;
+}
+
 int format(disk *diskptr)
 {
     const int NUM_USABLE_BLOCKS = NUM_BLOCKS - 1;        // one block reserved for super_block
@@ -206,7 +211,6 @@ int write_i(int inumber, char *data, int length, int offset)
                 /* allocate new data block and assign it to data_block_index */
                 data_block_index = get_free_block(sb->data_bitmap_block_idx, sb->inode_block_idx);
                 inodes[inode_offset].direct[data_blocknr] = data_block_index;
-                printf("Allocated data block: %d\n", data_block_index);
             }
         }
         else
@@ -227,7 +231,7 @@ int write_i(int inumber, char *data, int length, int offset)
         data_offset = 0;
         data_blocknr++;
     }
-    inodes[inode_offset].size = offset + bytes_written;
+    inodes[inode_offset].size = max(offset + bytes_written, inodes[inode_offset].size);
     if (write_block(my_disk, sb->inode_block_idx + inode_blocknr, inodes) != 0)
         return -1;
     return bytes_written;
@@ -253,7 +257,6 @@ int read_i(int inumber, char *data, int length, int offset)
         printf("inode doesn't exist\n");
         return -1;
     }
-
     const int NUM_INODES_PER_BLOCK = BLOCK_SIZE / sizeof(inode);
     int inode_blocknr = inumber / NUM_INODES_PER_BLOCK;
     int inode_offset = inumber % NUM_INODES_PER_BLOCK;
